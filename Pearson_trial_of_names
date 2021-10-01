@@ -1,0 +1,74 @@
+from numpy import uint8
+import pandas as pd
+from pandas.io.pytables import IndexCol
+import requests
+import json
+from functools import reduce
+
+#ONGELMA ->
+def vrk_names_download(alkuvuosi, loppuvuosi, nimet):
+    file = pd.read_csv("https://raw.githubusercontent.com/Yleisradio/yle-uutiset/master/names/data.csv", encoding="latin-1", header=0) #Etunimet_1900-2016
+
+    names=[]
+    for name in nimet:
+        names.append(name)
+    df_lists=[]
+    for vuosi in range(alkuvuosi, loppuvuosi+1):
+        #data= file.loc[(file["Syntymävuosi"] >= alkuvuosi) & (file["Syntymävuosi"] <= loppuvuosi) & ((file["Etunimi"].astype(str).str.len()>1))]
+        data = file.loc[(file["Etunimi"].isin(names)) & (file["Syntymävuosi"] == vuosi) & (file["Etunimi"].astype(str).str.len()>1)]
+        data["Määrä"]=data["Määrä"].str.replace("Alle 10", "10")
+        data = data.astype({"Syntymävuosi":int, "Määrä":int})
+        data= data.drop(columns="Sukupuoli")
+        annettuja_nimia =data["Määrä"].sum(axis=0)
+        data["Osuus nimetyistä %"] = data.apply(lambda row: row["Määrä"] / annettuja_nimia *100, axis=1)
+        jatko_data=data.drop(columns=["Määrä", "Syntymävuosi"])
+        df_lists.append(jatko_data)
+        
+    dfs_ed = [df.set_index('Etunimi') for df in df_lists]
+    
+    #name_data = pd.concat(dfs_ed, axis=1).reset_index() #.fillna(0)
+    name_data = reduce(lambda df1, df2: df1.merge(df2, left_index=True, right_index=True, how="outer"), dfs_ed)
+    name_data=name_data.fillna(0)
+    name_data.to_csv(f"vrk_names_{alkuvuosi}_{loppuvuosi}.tsv", sep="\t")
+    
+
+def news_names_download(alkuvuosi, loppuvuosi):
+   #top 100 annetut etunimet aikaväliltä 1900-1929 ja niiden määrät korp-tietokannan sanomalehtiaineistoissa samoina vuosina.
+    dfs=[]
+    
+    for vuosi in range(alkuvuosi, loppuvuosi+1):
+        url=("https://korp.csc.fi/cgi-bin/korp/"
+        "korp.cgi?command=info&groupby=lemma&defaultcontext=1+sentence&&cache=true&start=0&end=1001&corpus=KLK_FI_VUOSI&context=&incremental=true&"
+        "cqp=%20_.text_publ_type=%22sanomalehti%22%5D&defaultwithin=sentence&within=&loginfo=lang%3Dfi+search%3Dadv&sort=keyword&indent=2")
+        slice_url=url.replace("VUOSI", str(vuosi))
+        r=requests.get(slice_url)
+        data = r.json()
+        saneiden_maara=data["total_size"]
+
+        filename= f"news_names_results/only_newspapers/news_data_names_{vuosi}.tsv"
+        data=pd.read_csv(filename, sep="\t", header=None, names=["Etunimi", "Määrä"], encoding="latin-1")
+        #data["Saneiden_maara"]=saneiden_maara
+        data["Nimet / saneet ‰"] = data["Määrä"] / saneiden_maara * 1000
+        dfs.append(data)
+
+    dfs_ed = [df.set_index('Etunimi') for df in dfs]
+    merged_df = pd.concat(dfs_ed, axis=1) #.fillna(0)
+    merged_df = merged_df.drop(columns="Määrä")
+    
+    return merged_df
+
+def main():
+    aloitusvuosi=1900
+    lopetusvuosi=1929
+    
+    news_data=news_names_download(aloitusvuosi, lopetusvuosi)
+    nimet=news_data.index
+    vrk_names_download(aloitusvuosi, 1919, nimet)
+    vrk_names_download(1920, 1929, nimet)
+
+    #joined_vrk_data = vrk_data1.join(vrk2_data2)
+    #pd.concat([vrk_data1, vrk2_data2], axis=1)
+
+    #print(joined_vrk_data.head())
+
+main()
